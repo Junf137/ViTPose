@@ -3,7 +3,7 @@ dataclasses; python_version == '3.6'
 json_tricks
 matplotlib
 munkres
-numpy
+numpy<2.0.0
 opencv-python
 pillow
 scipy

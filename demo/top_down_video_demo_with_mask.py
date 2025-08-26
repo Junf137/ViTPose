@@ -167,7 +167,7 @@ def main():
             # Create empty visualization
             vis_img = img.copy()
         else:
-            print(f"Found {len(mask_results)} regions in mask frame {frame_idx}")
+            # print(f"Found {len(mask_results)} regions in mask frame {frame_idx}")
 
             # Convert mask results to the format expected by mmpose
             person_results = []

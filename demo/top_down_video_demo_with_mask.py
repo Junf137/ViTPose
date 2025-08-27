@@ -112,6 +112,64 @@ def get_output_filename(video_path, suffix):
     return f"{name_without_ext}_{suffix}.json"
 
 
+def overlay_mask_on_image(img, mask_frame, alpha=0.5):
+    """Overlay mask on the original image.
+
+    Args:
+        img: Original image (BGR format)
+        mask_frame: Binary mask frame
+        alpha: Transparency factor for mask overlay (0.0 to 1.0)
+
+    Returns:
+        Image with mask overlay
+    """
+    # Convert mask to 3-channel if needed
+    if len(mask_frame.shape) == 3:
+        mask_gray = cv2.cvtColor(mask_frame, cv2.COLOR_BGR2GRAY)
+    else:
+        mask_gray = mask_frame.copy()
+
+    # Create colored mask (green overlay)
+    mask_colored = np.zeros_like(img)
+    mask_colored[:, :, 1] = mask_gray  # Green channel
+
+    # Create binary mask for blending
+    mask_binary = (mask_gray > 127).astype(np.float32)
+    mask_3channel = np.stack([mask_binary] * 3, axis=2)
+
+    # Blend the images
+    result = img.astype(np.float32) * (1 - alpha * mask_3channel) + mask_colored.astype(np.float32) * alpha * mask_3channel
+
+    return result.astype(np.uint8)
+
+
+def draw_mask_bboxes(img, bboxes, color=(0, 255, 0), thickness=2):
+    """Draw mask bounding boxes on image.
+
+    Args:
+        img: Image to draw on (will be modified in place)
+        bboxes: List of bounding boxes in format [x1, y1, x2, y2, score]
+        color: Color of bounding box in BGR format
+        thickness: Thickness of bounding box lines
+
+    Returns:
+        Modified image with bounding boxes drawn
+    """
+    for bbox in bboxes:
+        x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+        cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness)
+
+        # Add label
+        label = f"Mask"
+        label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)[0]
+        cv2.rectangle(img, (x1, y1 - label_size[1] - 10),
+                     (x1 + label_size[0], y1), color, -1)
+        cv2.putText(img, label, (x1, y1 - 5),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+
+    return img
+
+
 def add_keypoint_indices(img, pose_results, kpt_score_thr=0.3, font_scale=0.4, font_color=(255, 255, 255), font_thickness=1):
     """Add keypoint indices next to each keypoint in the image.
 
@@ -210,6 +268,10 @@ def main():
         '--pose-output-root',
         default='',
         help='Root directory to save pose results data. Default: no saving.')
+    parser.add_argument(
+        '--mask-bbox-video-root',
+        default='',
+        help='Root directory to save mask+bbox overlay video. Default: no saving.')
 
     args = parser.parse_args()
 
@@ -276,6 +338,19 @@ def main():
                          f'vis_{os.path.basename(args.video_path)}'), fourcc,
             fps, size)
 
+    # Setup mask+bbox video saving
+    save_mask_bbox_video = args.mask_bbox_video_root != ''
+    if save_mask_bbox_video:
+        os.makedirs(args.mask_bbox_video_root, exist_ok=True)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        size = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        mask_bbox_videoWriter = cv2.VideoWriter(
+            os.path.join(args.mask_bbox_video_root,
+                         f'mask_bbox_{os.path.basename(args.video_path)}'), fourcc,
+            fps, size)
+
     # Optional
     return_heatmap = False
 
@@ -300,6 +375,18 @@ def main():
         # Save bounding box data if requested
         if save_bbox_data_flag:
             bbox_data[frame_idx] = mask_results
+
+        # Create mask+bbox overlay video frame
+        if save_mask_bbox_video:
+            # Start with original image
+            mask_bbox_img = img.copy()
+
+            # Overlay mask on the image (green tint)
+            mask_bbox_img = overlay_mask_on_image(mask_bbox_img, mask_frame, alpha=0.3)
+
+            # Draw mask bounding boxes
+            if len(mask_results) > 0:
+                mask_bbox_img = draw_mask_bboxes(mask_bbox_img, mask_results)
 
         if len(mask_results) == 0:
             print(f"No valid regions found in mask frame {frame_idx}")
@@ -352,9 +439,14 @@ def main():
         if args.show:
             cv2.imshow('Image', vis_img)
             cv2.imshow('Mask', mask_frame)
+            if save_mask_bbox_video:
+                cv2.imshow('Mask+BBox', mask_bbox_img)
 
         if save_out_video:
             videoWriter.write(vis_img)
+
+        if save_mask_bbox_video:
+            mask_bbox_videoWriter.write(mask_bbox_img)
 
         if args.show and cv2.waitKey(1) & 0xFF == ord('q'):
             break
@@ -363,6 +455,8 @@ def main():
     mask_cap.release()
     if save_out_video:
         videoWriter.release()
+    if save_mask_bbox_video:
+        mask_bbox_videoWriter.release()
     if args.show:
         cv2.destroyAllWindows()
 

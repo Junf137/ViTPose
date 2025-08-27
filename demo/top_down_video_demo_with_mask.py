@@ -112,6 +112,52 @@ def get_output_filename(video_path, suffix):
     return f"{name_without_ext}_{suffix}.json"
 
 
+def add_keypoint_indices(img, pose_results, kpt_score_thr=0.3, font_scale=0.4, font_color=(255, 255, 255), font_thickness=1):
+    """Add keypoint indices next to each keypoint in the image.
+
+    Args:
+        img: The image to draw on (will be modified in place)
+        pose_results: List of pose results containing keypoints
+        kpt_score_thr: Minimum keypoint score threshold to display index
+        font_scale: Font scale for the text
+        font_color: Color of the text in BGR format
+        font_thickness: Thickness of the text
+
+    Returns:
+        Modified image with keypoint indices added
+    """
+    if not pose_results:
+        return img
+
+    for pose_result in pose_results:
+        if 'keypoints' not in pose_result:
+            continue
+
+        keypoints = pose_result['keypoints']
+        if not isinstance(keypoints, np.ndarray):
+            keypoints = np.array(keypoints)
+
+        # keypoints shape should be (num_joints, 3) where 3 = [x, y, visibility_score]
+        for kpt_idx, kpt in enumerate(keypoints):
+            x_coord, y_coord, kpt_score = int(kpt[0]), int(kpt[1]), kpt[2]
+
+            # Only draw index if keypoint score is above threshold
+            if kpt_score > kpt_score_thr:
+                # Offset the text slightly from the keypoint to avoid overlap
+                text_x = x_coord + 8
+                text_y = y_coord - 8
+
+                # Make sure text stays within image bounds
+                text_y = max(15, text_y)  # Keep text at least 15 pixels from top
+                text_x = min(img.shape[1] - 20, text_x)  # Keep text at least 20 pixels from right edge
+
+                # Draw the keypoint index
+                cv2.putText(img, str(kpt_idx), (text_x, text_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_color, font_thickness)
+
+    return img
+
+
 def main():
     """Visualize the demo videos using mask video for region detection.
 
@@ -299,6 +345,9 @@ def main():
                 radius=args.radius,
                 thickness=args.thickness,
                 show=False)
+
+            # Add keypoint indices to the visualization
+            vis_img = add_keypoint_indices(vis_img, pose_results, kpt_score_thr=args.kpt_thr)
 
         if args.show:
             cv2.imshow('Image', vis_img)

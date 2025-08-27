@@ -2,6 +2,7 @@
 import os
 import warnings
 import numpy as np
+import json
 from argparse import ArgumentParser
 
 import cv2
@@ -41,6 +42,74 @@ def extract_bounding_boxes_from_mask(mask_frame, min_area=500, bbox_thr=0.5):
             bboxes.append([x, y, x + w, y + h, 1.0])  # Score is 1.0 since mask is binary
 
     return bboxes
+
+
+def save_bbox_data(bbox_data, output_path):
+    """Save bounding box data to JSON file.
+
+    Args:
+        bbox_data: Dictionary containing frame-wise bounding box data
+        output_path: Path to output JSON file
+    """
+    # Convert numpy arrays to lists for JSON serialization
+    serializable_data = {}
+    for frame_idx, bboxes in bbox_data.items():
+        serializable_data[str(frame_idx)] = []
+        for bbox in bboxes:
+            if isinstance(bbox, np.ndarray):
+                serializable_data[str(frame_idx)].append(bbox.tolist())
+            else:
+                serializable_data[str(frame_idx)].append(bbox)
+
+    with open(output_path, 'w') as f:
+        json.dump(serializable_data, f, indent=2)
+    print(f"Bounding box data saved to: {output_path}")
+
+
+def save_pose_data(pose_data, output_path):
+    """Save pose results data to JSON file.
+
+    Args:
+        pose_data: Dictionary containing frame-wise pose results
+        output_path: Path to output JSON file
+    """
+    # Convert pose results to serializable format
+    serializable_data = {}
+    for frame_idx, poses in pose_data.items():
+        serializable_data[str(frame_idx)] = []
+        for pose in poses:
+            pose_dict = {}
+            if 'bbox' in pose:
+                pose_dict['bbox'] = pose['bbox'].tolist() if isinstance(pose['bbox'], np.ndarray) else pose['bbox']
+            if 'keypoints' in pose:
+                pose_dict['keypoints'] = pose['keypoints'].tolist() if isinstance(pose['keypoints'], np.ndarray) else pose['keypoints']
+            # Add other pose attributes if they exist
+            for key, value in pose.items():
+                if key not in ['bbox', 'keypoints']:
+                    if isinstance(value, np.ndarray):
+                        pose_dict[key] = value.tolist()
+                    else:
+                        pose_dict[key] = value
+            serializable_data[str(frame_idx)].append(pose_dict)
+
+    with open(output_path, 'w') as f:
+        json.dump(serializable_data, f, indent=2)
+    print(f"Pose results data saved to: {output_path}")
+
+
+def get_output_filename(video_path, suffix):
+    """Get output filename based on input video name.
+
+    Args:
+        video_path: Path to input video
+        suffix: Suffix to add to filename (e.g., 'bbox', 'pose')
+
+    Returns:
+        Output filename with suffix
+    """
+    video_name = os.path.basename(video_path)
+    name_without_ext = os.path.splitext(video_name)[0]
+    return f"{name_without_ext}_{suffix}.json"
 
 
 def main():
@@ -87,6 +156,14 @@ def main():
         type=int,
         default=1,
         help='Link thickness for visualization')
+    parser.add_argument(
+        '--bbox-output-root',
+        default='',
+        help='Root directory to save bounding box data. Default: no saving.')
+    parser.add_argument(
+        '--pose-output-root',
+        default='',
+        help='Root directory to save pose results data. Default: no saving.')
 
     args = parser.parse_args()
 
@@ -131,6 +208,18 @@ def main():
         os.makedirs(args.out_video_root, exist_ok=True)
         save_out_video = True
 
+    # Setup saving for bounding box and pose data
+    save_bbox_data_flag = args.bbox_output_root != ''
+    save_pose_data_flag = args.pose_output_root != ''
+
+    if save_bbox_data_flag:
+        os.makedirs(args.bbox_output_root, exist_ok=True)
+        bbox_data = {}  # Dictionary to store frame-wise bounding box data
+
+    if save_pose_data_flag:
+        os.makedirs(args.pose_output_root, exist_ok=True)
+        pose_data = {}  # Dictionary to store frame-wise pose results
+
     if save_out_video:
         fps = cap.get(cv2.CAP_PROP_FPS)
         size = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
@@ -162,10 +251,17 @@ def main():
         mask_results = extract_bounding_boxes_from_mask(
             mask_frame, min_area=args.min_area, bbox_thr=args.bbox_thr)
 
+        # Save bounding box data if requested
+        if save_bbox_data_flag:
+            bbox_data[frame_idx] = mask_results
+
         if len(mask_results) == 0:
             print(f"No valid regions found in mask frame {frame_idx}")
             # Create empty visualization
             vis_img = img.copy()
+            # Save empty pose results if requested
+            if save_pose_data_flag:
+                pose_data[frame_idx] = []
         else:
             # print(f"Found {len(mask_results)} regions in mask frame {frame_idx}")
 
@@ -187,6 +283,10 @@ def main():
                 dataset_info=dataset_info,
                 return_heatmap=return_heatmap,
                 outputs=output_layer_names)
+
+            # Save pose results if requested
+            if save_pose_data_flag:
+                pose_data[frame_idx] = pose_results
 
             # Show the results
             vis_img = vis_pose_result(
@@ -216,6 +316,21 @@ def main():
         videoWriter.release()
     if args.show:
         cv2.destroyAllWindows()
+
+    # Save collected data to files
+    if save_bbox_data_flag and bbox_data:
+        bbox_output_path = os.path.join(
+            args.bbox_output_root,
+            get_output_filename(args.video_path, 'bbox')
+        )
+        save_bbox_data(bbox_data, bbox_output_path)
+
+    if save_pose_data_flag and pose_data:
+        pose_output_path = os.path.join(
+            args.pose_output_root,
+            get_output_filename(args.video_path, 'pose')
+        )
+        save_pose_data(pose_data, pose_output_path)
 
 
 if __name__ == '__main__':

@@ -442,8 +442,8 @@ def main():
     parser = ArgumentParser()
     parser.add_argument('video_path', help='Path to input video file')
     parser.add_argument('pose_json', help='Path to pose JSON file')
-    parser.add_argument('--output-video', type=str, required=True,
-                       help='Path to output video file')
+    parser.add_argument('--output-video-root', type=str, required=True,
+                       help='Root directory for output video files')
     parser.add_argument('--kpt-thr', type=float, default=0.3,
                        help='Keypoint confidence threshold')
     parser.add_argument('--radius', type=int, default=4,
@@ -465,6 +465,12 @@ def main():
 
     args = parser.parse_args()
 
+    # Extract input video filename and create output path
+    video_filename = os.path.basename(args.video_path)
+    video_name, video_ext = os.path.splitext(video_filename)
+    output_filename = f"vis_{video_name}{video_ext}"
+    output_video_path = os.path.join(args.output_video_root, output_filename)
+
     # Load pose data
     print(f"Loading pose data from {args.pose_json}...")
     pose_data = load_pose_data(args.pose_json)
@@ -484,9 +490,9 @@ def main():
     print(f"Video properties: {width}x{height}, {total_frames} frames, {fps:.2f} FPS")
 
     # Setup output video writer
-    os.makedirs(os.path.dirname(args.output_video), exist_ok=True)
+    os.makedirs(args.output_video_root, exist_ok=True)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(args.output_video, fourcc, fps, (width, height))
+    out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
 
     frame_idx = 0
     processed_frames = 0
@@ -608,7 +614,7 @@ def main():
     if total_poses_input > 0:
         kept_percentage = (total_poses_filtered / total_poses_input) * 100
         print(f"  - Kept: {kept_percentage:.1f}%")
-    print(f"Output saved to: {args.output_video}")
+    print(f"Output saved to: {output_video_path}")
 
 
 if __name__ == '__main__':

@@ -301,6 +301,101 @@ def has_valid_arm_keypoints(keypoints, kpt_thr=0.3):
     return has_valid, total_confidence
 
 
+def draw_keypoint_info(img, pose_data_list, kpt_thr=0.3, font_scale=0.4, font_thickness=1):
+    """Draw keypoint information (ID, location, confidence) for all persons.
+
+    Args:
+        img: Image to draw on
+        pose_data_list: List of pose data with 'keypoints' and 'arm_confidence'
+        kpt_thr: Confidence threshold for displaying keypoints
+        font_scale: Font scale for the text
+        font_thickness: Font thickness for the text
+
+    Returns:
+        Modified image with keypoint info displayed
+    """
+    # Keypoint names for arm keypoints
+    keypoint_names = {
+        5: 'L_Shoulder',
+        6: 'R_Shoulder',
+        7: 'L_Elbow',
+        8: 'R_Elbow',
+        9: 'L_Wrist',
+        10: 'R_Wrist'
+    }
+
+    # Starting position for text (left upper corner)
+    start_x = 10
+    start_y = 80  # Leave space for frame info
+    line_height = 18
+    current_y = start_y
+
+    # Background rectangle for better readability
+    info_lines = []
+
+    for person_idx, pose_data in enumerate(pose_data_list):
+        keypoints = pose_data['keypoints']
+        arm_confidence = pose_data.get('arm_confidence', 0.0)
+
+        # Person header
+        person_header = f"Person {person_idx}: Arms={arm_confidence:.2f}"
+        info_lines.append(person_header)
+
+        # Add keypoint details
+        for kpt_idx in [5, 6, 7, 8, 9, 10]:  # Arm keypoints only
+            if kpt_idx < len(keypoints):
+                x, y, conf = float(keypoints[kpt_idx][0]), float(keypoints[kpt_idx][1]), float(keypoints[kpt_idx][2])
+                kpt_name = keypoint_names[kpt_idx]
+
+                if conf > kpt_thr:
+                    info_text = f"  {kpt_idx}:{kpt_name} ({x:.0f},{y:.0f}) {conf:.2f}"
+                    info_lines.append(info_text)
+                # else: do not show keypoint if confidence is not above threshold
+
+        # Add separator between persons
+        if person_idx < len(pose_data_list) - 1:
+            info_lines.append("")
+
+    if info_lines:
+        # Calculate background rectangle dimensions
+        max_width = 0
+        for line in info_lines:
+            if line.strip():  # Skip empty lines for width calculation
+                text_size = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
+                max_width = max(max_width, text_size[0])
+
+        bg_height = len(info_lines) * line_height + 10
+        bg_width = max_width + 20
+
+        # Draw semi-transparent background
+        overlay = img.copy()
+        cv2.rectangle(overlay, (start_x - 5, start_y - 15),
+                     (start_x + bg_width, start_y + bg_height - 15),
+                     (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.7, img, 0.3, 0, img)
+
+        # Draw border
+        cv2.rectangle(img, (start_x - 5, start_y - 15),
+                     (start_x + bg_width, start_y + bg_height - 15),
+                     (255, 255, 255), 1)
+
+        # Draw text lines
+        for i, line in enumerate(info_lines):
+            if line.strip():  # Only draw non-empty lines
+                text_y = current_y + i * line_height
+
+                # Color coding for different status
+                if line.startswith("Person"):
+                    color = (100, 255, 255)  # Yellow for person header
+                else:
+                    color = (100, 255, 100)  # Green for valid keypoints
+
+                cv2.putText(img, line, (start_x, text_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, font_thickness)
+
+    return img
+
+
 def draw_bounding_boxes(img, pose_data_list, color=(0, 255, 0), thickness=2):
     """Draw bounding boxes on image with arm confidence scores.
 
@@ -365,6 +460,8 @@ def main():
                        help='Disable drawing connecting lines between arm joints')
     parser.add_argument('--overlap-threshold', type=float, default=50.0,
                        help='Distance threshold for filtering overlapping arms')
+    parser.add_argument('--show-keypoint-info', action='store_true',
+                       help='Show keypoint ID, location, and confidence for each person')
 
     args = parser.parse_args()
 
@@ -401,6 +498,7 @@ def main():
     print(f"  - Keypoint confidence threshold: {args.kpt_thr}")
     print(f"  - Arm overlap threshold: {args.overlap_threshold} pixels")
     print(f"  - Drawing connecting lines: {not args.no_lines}")
+    print(f"  - Show keypoint info: {args.show_keypoint_info}")
     print()
 
     while cap.isOpened():
@@ -460,6 +558,15 @@ def main():
                 vis_frame = draw_bounding_boxes(
                     vis_frame, valid_poses,
                     thickness=args.bbox_thickness
+                )
+
+            # Draw keypoint information if requested
+            if args.show_keypoint_info and valid_poses:
+                vis_frame = draw_keypoint_info(
+                    vis_frame, valid_poses,
+                    kpt_thr=args.kpt_thr,
+                    font_scale=0.4,
+                    font_thickness=1
                 )
 
             # Update frame_poses count to reflect valid poses only

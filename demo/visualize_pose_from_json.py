@@ -49,8 +49,8 @@ def load_pose_data(json_path):
 
 
 def draw_keypoints_with_indices(img, keypoints, kpt_thr=0.3, radius=4,
-                               font_scale=0.4, font_thickness=1):
-    """Draw keypoints with index labels on image.
+                               font_scale=0.4, font_thickness=1, draw_lines=True):
+    """Draw keypoints with index labels and connecting lines on image.
 
     Args:
         img: Image to draw on (BGR format)
@@ -59,9 +59,10 @@ def draw_keypoints_with_indices(img, keypoints, kpt_thr=0.3, radius=4,
         radius: Radius of keypoint circles
         font_scale: Font scale for index labels
         font_thickness: Font thickness for index labels
+        draw_lines: Whether to draw connecting lines between arm joints
 
     Returns:
-        Modified image with keypoints and indices drawn
+        Modified image with keypoints, indices and connecting lines drawn
     """
     if not isinstance(keypoints, np.ndarray):
         keypoints = np.array(keypoints)
@@ -87,7 +88,45 @@ def draw_keypoints_with_indices(img, keypoints, kpt_thr=0.3, radius=4,
         (255, 0, 170)   # right_ankle - pink
     ]
 
+    # Define connections for drawing lines
+    # Format: (start_kpt_idx, end_kpt_idx, line_color, line_thickness)
+    connections = [
+        # Left arm: wrist -> elbow -> shoulder
+        (9, 7, (0, 255, 255), 3),    # left_wrist -> left_elbow (cyan)
+        (7, 5, (0, 255, 255), 3),    # left_elbow -> left_shoulder (cyan)
+
+        # Right arm: wrist -> elbow -> shoulder
+        (10, 8, (0, 170, 255), 3),   # right_wrist -> right_elbow (light blue)
+        (8, 6, (0, 170, 255), 3),    # right_elbow -> right_shoulder (light blue)
+    ]
+
+    # Draw connecting lines first (so they appear behind keypoints)
+    if draw_lines:
+        for start_idx, end_idx, line_color, line_thickness in connections:
+            if (start_idx < len(keypoints) and end_idx < len(keypoints) and
+                start_idx in [5, 6, 7, 8, 9, 10] and end_idx in [5, 6, 7, 8, 9, 10]):
+
+                start_kpt = keypoints[start_idx]
+                end_kpt = keypoints[end_idx]
+
+                start_x, start_y, start_conf = float(start_kpt[0]), float(start_kpt[1]), float(start_kpt[2])
+                end_x, end_y, end_conf = float(end_kpt[0]), float(end_kpt[1]), float(end_kpt[2])
+
+                # Only draw line if both keypoints are above confidence threshold
+                if start_conf > kpt_thr and end_conf > kpt_thr:
+                    start_point = (int(start_x), int(start_y))
+                    end_point = (int(end_x), int(end_y))
+
+                    # Draw line with black border for better visibility
+                    cv2.line(img, start_point, end_point, (0, 0, 0), line_thickness + 2)
+                    cv2.line(img, start_point, end_point, line_color, line_thickness)
+
+    # Draw keypoints and labels
     for kpt_idx, kpt in enumerate(keypoints):
+        # showing only the [5, 6, 7, 8, 9, 10] keypoints
+        if kpt_idx not in [5, 6, 7, 8, 9, 10]:
+            continue
+
         x, y, conf = float(kpt[0]), float(kpt[1]), float(kpt[2])
 
         # Only draw if confidence is above threshold
@@ -189,6 +228,8 @@ def main():
                        help='Show video during processing')
     parser.add_argument('--fps', type=float, default=None,
                        help='Output video FPS (default: same as input)')
+    parser.add_argument('--no-lines', action='store_true',
+                       help='Disable drawing connecting lines between arm joints')
 
     args = parser.parse_args()
 
@@ -244,7 +285,8 @@ def main():
                         vis_frame, keypoints,
                         kpt_thr=args.kpt_thr,
                         radius=args.radius,
-                        font_scale=args.font_scale
+                        font_scale=args.font_scale,
+                        draw_lines=not args.no_lines
                     )
 
                 # Collect bounding box

@@ -171,28 +171,143 @@ def draw_keypoints_with_indices(img, keypoints, kpt_thr=0.3, radius=4,
     return img
 
 
-def draw_bounding_boxes(img, bboxes, color=(0, 255, 0), thickness=2):
-    """Draw bounding boxes on image.
+def calculate_arm_confidence(keypoints, arm_indices):
+    """Calculate total confidence for arm keypoints.
+
+    Args:
+        keypoints: Array of keypoints in format [[x, y, conf], ...]
+        arm_indices: List of keypoint indices for the arm
+
+    Returns:
+        Total confidence score for the arm
+    """
+    total_conf = 0.0
+    for idx in arm_indices:
+        if idx < len(keypoints):
+            total_conf += float(keypoints[idx][2])
+    return total_conf
+
+
+def filter_overlapping_arms(keypoints, overlap_threshold=50.0):
+    """Filter out overlapping left/right arms, keeping the one with higher confidence.
+
+    Args:
+        keypoints: Array of keypoints in format [[x, y, conf], ...]
+        overlap_threshold: Distance threshold to consider arms as overlapping
+
+    Returns:
+        Modified keypoints array with filtered arms
+    """
+    if not isinstance(keypoints, np.ndarray):
+        keypoints = np.array(keypoints)
+
+    # Define arm keypoint indices
+    left_arm_indices = [5, 7, 9]   # left_shoulder, left_elbow, left_wrist
+    right_arm_indices = [6, 8, 10] # right_shoulder, right_elbow, right_wrist
+
+    # Check if both arms have sufficient keypoints above threshold
+    left_valid_kpts = []
+    right_valid_kpts = []
+
+    for idx in left_arm_indices:
+        if idx < len(keypoints) and float(keypoints[idx][2]) > 0.3:
+            left_valid_kpts.append(keypoints[idx])
+
+    for idx in right_arm_indices:
+        if idx < len(keypoints) and float(keypoints[idx][2]) > 0.3:
+            right_valid_kpts.append(keypoints[idx])
+
+    # If we don't have enough valid keypoints for both arms, return as is
+    if len(left_valid_kpts) < 2 or len(right_valid_kpts) < 2:
+        return keypoints
+
+    # Calculate average positions for both arms
+    left_avg_x = np.mean([float(kpt[0]) for kpt in left_valid_kpts])
+    left_avg_y = np.mean([float(kpt[1]) for kpt in left_valid_kpts])
+
+    right_avg_x = np.mean([float(kpt[0]) for kpt in right_valid_kpts])
+    right_avg_y = np.mean([float(kpt[1]) for kpt in right_valid_kpts])
+
+    # Calculate distance between arm centers
+    distance = np.sqrt((left_avg_x - right_avg_x)**2 + (left_avg_y - right_avg_y)**2)
+
+    # If arms are too close, keep the one with higher confidence
+    if distance < overlap_threshold:
+        left_conf = calculate_arm_confidence(keypoints, left_arm_indices)
+        right_conf = calculate_arm_confidence(keypoints, right_arm_indices)
+
+        # Zero out the arm with lower confidence
+        if left_conf >= right_conf:
+            # Keep left arm, zero out right arm
+            for idx in right_arm_indices:
+                if idx < len(keypoints):
+                    keypoints[idx] = [0, 0, 0]
+        else:
+            # Keep right arm, zero out left arm
+            for idx in left_arm_indices:
+                if idx < len(keypoints):
+                    keypoints[idx] = [0, 0, 0]
+
+    return keypoints
+
+
+def has_valid_arm_keypoints(keypoints, kpt_thr=0.3):
+    """Check if pose has valid wrist-elbow-shoulder keypoints.
+
+    Args:
+        keypoints: Array of keypoints in format [[x, y, conf], ...]
+        kpt_thr: Confidence threshold for valid keypoints
+
+    Returns:
+        Tuple of (has_valid_arms, total_arm_confidence)
+    """
+    if not isinstance(keypoints, np.ndarray):
+        keypoints = np.array(keypoints)
+
+    # Arm keypoint indices: shoulders, elbows, wrists
+    arm_indices = [5, 6, 7, 8, 9, 10]
+
+    valid_count = 0
+    total_confidence = 0.0
+
+    for idx in arm_indices:
+        if idx < len(keypoints):
+            conf = float(keypoints[idx][2])
+            if conf > kpt_thr:
+                valid_count += 1
+                total_confidence += conf
+
+    # Require at least 1 valid arm keypoints
+    has_valid = valid_count >= 1
+
+    return has_valid, total_confidence
+
+
+def draw_bounding_boxes(img, pose_data_list, color=(0, 255, 0), thickness=2):
+    """Draw bounding boxes on image with arm confidence scores.
 
     Args:
         img: Image to draw on
-        bboxes: List of bounding boxes in format [x1, y1, x2, y2, score]
+        pose_data_list: List of pose data with 'bbox', 'keypoints', and 'arm_confidence'
         color: Color of bounding boxes in BGR format
         thickness: Thickness of bounding box lines
 
     Returns:
         Modified image with bounding boxes drawn
     """
-    for i, bbox in enumerate(bboxes):
+    for i, pose_data in enumerate(pose_data_list):
+        bbox = pose_data['bbox']
+        arm_confidence = pose_data.get('arm_confidence', 0.0)
+
         x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-        score = bbox[4] if len(bbox) > 4 else 1.0
+        bbox_score = bbox[4] if len(bbox) > 4 else 1.0
 
         # Draw bounding box
         cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness)
 
-        # Draw label with person ID and score
-        label = f"Person {i}: {score:.2f}"
-        label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)[0]
+        # Draw label with person ID, bbox score, and arm confidence
+        label = f"Person {i}: {bbox_score:.2f} | Arms: {arm_confidence:.2f}"
+        label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
 
         # Position label above bounding box
         label_y = y1 - 10 if y1 - 10 > label_size[1] else y1 + label_size[1] + 10
@@ -204,7 +319,7 @@ def draw_bounding_boxes(img, bboxes, color=(0, 255, 0), thickness=2):
 
         # Draw label text
         cv2.putText(img, label, (x1 + 2, label_y - 2),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
 
     return img
 
@@ -230,6 +345,8 @@ def main():
                        help='Output video FPS (default: same as input)')
     parser.add_argument('--no-lines', action='store_true',
                        help='Disable drawing connecting lines between arm joints')
+    parser.add_argument('--overlap-threshold', type=float, default=50.0,
+                       help='Distance threshold for filtering overlapping arms')
 
     args = parser.parse_args()
 
@@ -258,8 +375,16 @@ def main():
 
     frame_idx = 0
     processed_frames = 0
+    total_poses_input = 0
+    total_poses_filtered = 0
 
     print("Processing video...")
+    print(f"Filtering settings:")
+    print(f"  - Keypoint confidence threshold: {args.kpt_thr}")
+    print(f"  - Arm overlap threshold: {args.overlap_threshold} pixels")
+    print(f"  - Drawing connecting lines: {not args.no_lines}")
+    print()
+
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
@@ -274,31 +399,53 @@ def main():
         vis_frame = frame.copy()
 
         if frame_poses:
-            # Collect all bounding boxes for this frame
-            bboxes = []
+            total_poses_input += len(frame_poses)
+
+            # Filter and process poses
+            valid_poses = []
 
             for pose in frame_poses:
-                # Draw keypoints with indices
-                if 'keypoints' in pose:
+                if 'keypoints' in pose and 'bbox' in pose:
                     keypoints = pose['keypoints']
-                    vis_frame = draw_keypoints_with_indices(
-                        vis_frame, keypoints,
-                        kpt_thr=args.kpt_thr,
-                        radius=args.radius,
-                        font_scale=args.font_scale,
-                        draw_lines=not args.no_lines
-                    )
 
-                # Collect bounding box
-                if 'bbox' in pose:
-                    bboxes.append(pose['bbox'])
+                    # Check if pose has valid arm keypoints
+                    has_valid, arm_confidence = has_valid_arm_keypoints(keypoints, args.kpt_thr)
 
-            # Draw all bounding boxes
-            if bboxes:
+                    if has_valid:
+                        # Filter overlapping arms
+                        filtered_keypoints = filter_overlapping_arms(
+                            keypoints, args.overlap_threshold
+                        )
+
+                        # Store processed pose data
+                        valid_poses.append({
+                            'keypoints': filtered_keypoints,
+                            'bbox': pose['bbox'],
+                            'arm_confidence': arm_confidence
+                        })
+
+            total_poses_filtered += len(valid_poses)
+
+            # Draw keypoints for valid poses
+            for pose_data_valid in valid_poses:
+                keypoints = pose_data_valid['keypoints']
+                vis_frame = draw_keypoints_with_indices(
+                    vis_frame, keypoints,
+                    kpt_thr=args.kpt_thr,
+                    radius=args.radius,
+                    font_scale=args.font_scale,
+                    draw_lines=not args.no_lines
+                )
+
+            # Draw bounding boxes for valid poses
+            if valid_poses:
                 vis_frame = draw_bounding_boxes(
-                    vis_frame, bboxes,
+                    vis_frame, valid_poses,
                     thickness=args.bbox_thickness
                 )
+
+            # Update frame_poses count to reflect valid poses only
+            frame_poses = valid_poses
 
         # Add frame info
         info_text = f"Frame: {frame_idx}/{total_frames} | Persons: {len(frame_poses)}"
@@ -329,6 +476,13 @@ def main():
 
     print(f"Video processing complete!")
     print(f"Processed {processed_frames} frames")
+    print(f"Pose filtering results:")
+    print(f"  - Total poses input: {total_poses_input}")
+    print(f"  - Valid poses with arm keypoints: {total_poses_filtered}")
+    print(f"  - Filtered out: {total_poses_input - total_poses_filtered}")
+    if total_poses_input > 0:
+        kept_percentage = (total_poses_filtered / total_poses_input) * 100
+        print(f"  - Kept: {kept_percentage:.1f}%")
     print(f"Output saved to: {args.output_video}")
 
 

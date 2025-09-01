@@ -201,9 +201,13 @@ def filter_overlapping_arms(keypoints, overlap_threshold=50.0):
     if not isinstance(keypoints, np.ndarray):
         keypoints = np.array(keypoints)
 
-    # Define arm keypoint indices
-    left_arm_indices = [5, 7, 9]   # left_shoulder, left_elbow, left_wrist
-    right_arm_indices = [6, 8, 10] # right_shoulder, right_elbow, right_wrist
+    # Define keypoint indices
+    left_shoulder, right_shoulder = 5, 6
+    left_elbow, right_elbow = 7, 8
+    left_wrist, right_wrist = 9, 10
+
+    left_arm_indices = [left_shoulder, left_elbow, left_wrist]
+    right_arm_indices = [right_shoulder, right_elbow, right_wrist]
 
     # Check if both arms have sufficient keypoints above threshold
     left_valid_kpts = []
@@ -211,28 +215,42 @@ def filter_overlapping_arms(keypoints, overlap_threshold=50.0):
 
     for idx in left_arm_indices:
         if idx < len(keypoints) and float(keypoints[idx][2]) > 0.3:
-            left_valid_kpts.append(keypoints[idx])
+            left_valid_kpts.append((idx, keypoints[idx]))
 
     for idx in right_arm_indices:
         if idx < len(keypoints) and float(keypoints[idx][2]) > 0.3:
-            right_valid_kpts.append(keypoints[idx])
+            right_valid_kpts.append((idx, keypoints[idx]))
 
     # If we don't have enough valid keypoints for both arms, return as is
     if len(left_valid_kpts) < 2 or len(right_valid_kpts) < 2:
         return keypoints
 
-    # Calculate average positions for both arms
-    left_avg_x = np.mean([float(kpt[0]) for kpt in left_valid_kpts])
-    left_avg_y = np.mean([float(kpt[1]) for kpt in left_valid_kpts])
+    # Check if left/right shoulder or left/right elbow are too close
+    overlap = False
+    # Shoulders
+    if left_shoulder < len(keypoints) and right_shoulder < len(keypoints):
+        l_conf = float(keypoints[left_shoulder][2])
+        r_conf = float(keypoints[right_shoulder][2])
+        if l_conf > 0.3 and r_conf > 0.3:
+            lx, ly = float(keypoints[left_shoulder][0]), float(keypoints[left_shoulder][1])
+            rx, ry = float(keypoints[right_shoulder][0]), float(keypoints[right_shoulder][1])
+            dist = np.sqrt((lx - rx) ** 2 + (ly - ry) ** 2)
+            if dist < overlap_threshold:
+                overlap = True
 
-    right_avg_x = np.mean([float(kpt[0]) for kpt in right_valid_kpts])
-    right_avg_y = np.mean([float(kpt[1]) for kpt in right_valid_kpts])
+    # Elbows
+    if left_elbow < len(keypoints) and right_elbow < len(keypoints):
+        l_conf = float(keypoints[left_elbow][2])
+        r_conf = float(keypoints[right_elbow][2])
+        if l_conf > 0.3 and r_conf > 0.3:
+            lx, ly = float(keypoints[left_elbow][0]), float(keypoints[left_elbow][1])
+            rx, ry = float(keypoints[right_elbow][0]), float(keypoints[right_elbow][1])
+            dist = np.sqrt((lx - rx) ** 2 + (ly - ry) ** 2)
+            if dist < overlap_threshold:
+                overlap = True
 
-    # Calculate distance between arm centers
-    distance = np.sqrt((left_avg_x - right_avg_x)**2 + (left_avg_y - right_avg_y)**2)
-
-    # If arms are too close, keep the one with higher confidence
-    if distance < overlap_threshold:
+    # If either shoulders or elbows are too close, consider arms overlapped
+    if overlap:
         left_conf = calculate_arm_confidence(keypoints, left_arm_indices)
         right_conf = calculate_arm_confidence(keypoints, right_arm_indices)
 
